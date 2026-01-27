@@ -1,0 +1,5 @@
+opencv-contrib-python
+numpy
+dlib-bin
+face_recognition
+mediapipe
