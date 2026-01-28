@@ -6,21 +6,24 @@ from camera_system import CameraSystem
 def main():
     print("Initializing Security Camera...")
     
-    # Initialize Camera Check
     try:
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
             print("Error: Could not open camera.")
             return
+        
+        print("Camera warming up...")
+        import time
+        time.sleep(2.0)
     except Exception as e:
         print(f"Error accessing camera: {e}")
         return
 
-    # Initialize System
     cam_system = CameraSystem()
     
     print("Camera System Started.")
     print("Press 'q' to quit.")
+    print("Press 'n' to register (MUST BLINK FIRST).")
 
     try:
         while True:
@@ -29,53 +32,102 @@ def main():
                 print("Failed to grab frame")
                 break
 
-            # 1. Motion Detection
+            # 1. Update Camera System (Push Frame)
             is_motion = cam_system.check_motion(frame)
-
-            # 2. Face Recognition (Update thread)
             if is_motion:
                 cam_system.update_frame(frame)
             
-            # 3. Gesture Detection (Main Thread for UI speed)
-            landmarks, raw_landmarks_list = cam_system.detect_gesture_pass(frame)
-            if raw_landmarks_list:
-                # Custom drawing for Tasks API landmarks
-                h, w, _ = frame.shape
-                for point in raw_landmarks_list:
-                    cx, cy = int(point.x * w), int(point.y * h)
-                    cv2.circle(frame, (cx, cy), 5, (255, 0, 255), -1)
+            # 2. Get LATEST Status (Pull State)
+            # Returns: (motion, status, faces, ear, landmarks, msg)
+            (motion_detected, 
+             face_status, 
+             face_locations, 
+             current_ear, 
+             gesture_landmarks, 
+             gesture_msg) = cam_system.get_status()
 
-            # Get latest status
-            _, face_status = cam_system.get_status()
-
-            # 4. Visual Feedback
+            # 3. Draw UI
             height, width = frame.shape[:2]
-            center = (width - 30, height - 30)
-            radius = 15
+
+            # Draw Gestures
+            if gesture_landmarks:
+                h, w, _ = frame.shape
+                for point in gesture_landmarks:
+                    if hasattr(point, 'x'):
+                        cx, cy = int(point.x * w), int(point.y * h)
+                        cv2.circle(frame, (cx, cy), 5, (255, 0, 255), -1)
+
+            # Box Color Logic
+            box_color = (0, 0, 255) # Red (Unknown)
+            status_text = "UNKNOWN"
             
-            if face_status == 'identified' or face_status == 'access_granted':
-                color = (0, 255, 0) # Green
-                cv2.circle(frame, center, radius, color, -1)
-                
-                if face_status == 'access_granted':
-                     cv2.putText(frame, "ACCESS GRANTED (GESTURE)", (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                else:
-                     cv2.putText(frame, "ACCESS GRANTED (FACE)", (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            if face_status == 'access_granted':
+                box_color = (0, 255, 0) # Green
+                status_text = "ACCESS GRANTED"
+            elif face_status == 'verifying_liveness':
+                box_color = (255, 255, 0) # Cyan/Yellowish
+                status_text = "BLINK TO VERIFY"
+            elif face_status == 'identified':
+                 box_color = (0, 255, 255) # Yellow
+                 status_text = "IDENTIFIED"
 
+            for (top, right, bottom, left) in face_locations:
+                cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
+                cv2.putText(frame, status_text, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
+            
+            # Global Text
+            if face_status == 'access_granted':
+                 cv2.putText(frame, "ACCESS GRANTED", (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            elif face_status == 'verifying_liveness':
+                 cv2.putText(frame, "PLEASE BLINK EYES", (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             elif face_status == 'unknown':
-                color = (0, 0, 255) # Red
-                cv2.circle(frame, center, radius, color, -1)
-                cv2.putText(frame, "UNKNOWN - GESTURE REQUIRED", (10, height - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                # Show Gesture Prompt/Status
-                cv2.putText(frame, cam_system.gesture_message, (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                 cv2.putText(frame, "UNKNOWN - GESTURE REQUIRED", (10, height - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                 # Show gesture feedback
+                 cv2.putText(frame, gesture_msg, (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            if is_motion:
+            if motion_detected:
                 cv2.putText(frame, "Motion Detected", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            
+            # Show Resolution
+            cv2.putText(frame, f"Res: {width}x{height}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Liveness Feedback
+            if cam_system.liveness_verified:
+                 cv2.putText(frame, "LIVENESS: OK", (width - 150, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            else:
+                 cv2.putText(frame, "LIVENESS: WAIT", (width - 150, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+            # Debug EAR value
+            ear_text = f"Eye Openness: {current_ear:.2f}"
+            ear_color = (0, 255, 0) if current_ear > 0.30 else (0, 0, 255)
+            
+            # Only show EAR if needed
+            if face_status is not None:
+                 cv2.putText(frame, ear_text, (width - 250, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, ear_color, 1)
 
             cv2.imshow('Security Camera', frame)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            # Limit to ~10 FPS (100ms delay) to reduce CPU usage
+            key = cv2.waitKey(100) & 0xFF
+            if key == ord('q'):
                 break
+            elif key == ord('n'):
+                # Registration Mode
+                if not cam_system.liveness_verified:
+                    print("\n[WARNING] Cannot Register: Liveness Check Failed.")
+                    print("Please BLINK at the camera until 'LIVENESS: OK' appears, then press 'n'.\n")
+                else:
+                    print("\n--- REGISTRATION MODE ---")
+                    print("Pausing camera...")
+                    # Show frame one last time? Thread is paused.
+                    name = input("Enter name for the new person: ")
+                    if name:
+                        success, msg = cam_system.register_face(frame, name)
+                        print(msg)
+                    else:
+                        print("Registration cancelled.")
+                    print("Resuming camera...\n")
+                
     except KeyboardInterrupt:
         pass
     finally:
